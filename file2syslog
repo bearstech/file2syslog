@@ -1,0 +1,340 @@
+#!/usr/bin/env perl
+
+# file2syslog - tail a bunch of files and forward them to syslog
+# Copyright (C) 2015 Bearstech - http://bearstech.com
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+use strict;
+use warnings;
+use Getopt::Long;
+use Sys::Syslog;
+use Fcntl 'SEEK_CUR';
+use POSIX qw(strftime setlocale LC_TIME);
+use Socket;
+
+# Options
+my $address   = '/dev/log';
+my $facility  = 'user';
+my $priority  = 'info';
+my $scan      = 10;
+my $statefile;
+my $listfile;
+my $help  = 0;
+my $debug = 0;
+
+my $running = 1;  # Flag cleared by signal handler
+my $logsock;
+my $logprio;
+my $logtime;
+my %states;
+my %saved;
+
+
+sub print_help {
+  print <<EOF;
+Usage: $0 [options] logfile[ tag] ...
+
+Options :
+
+  -a|--address ADDR        (default: /dev/log)
+  -d|--debug
+  -f|--facility FACILITY   (default: user)
+  -p|--priority PRIO       (default: info)
+  -l|--list file
+  -s|--scan-period SECONDS (default: 10)
+  -t|--state-file FILE
+
+Logfiles are either given as args or either read from a file. Both sources are
+merged. Wildcards are authorized in file names. Files may be 'tagged'
+(replacing syslog ident) by appending the file name with a word (either from
+arg or list file) :
+
+  $0 'rails-app.log rails'
+
+If you don't provide a statefile, this program will re-issue already parsed
+lines upon restart. Otherwise, state is automatically read at startup and saved
+if program is interrupted.
+
+EOF
+  exit 0;
+}
+
+sub debug {
+  printf STDERR @_ if $debug;
+}
+
+sub info {
+  print STDERR $_[0]."\n";
+}
+
+sub error {
+  print STDERR $_[0]."\n";
+}
+
+sub custom_log_init {
+  my ($a, $f, $p) = @_;
+
+  my $_f = Sys::Syslog::xlate($f); die "$f: unknown facility" if $_f < 0;
+  my $_p = Sys::Syslog::xlate($p); die "$p: unknown priority" if $_p < 0;
+  $logprio = $_f + $_p;
+
+  setlocale(LC_TIME, 'C');       # To generate proper timestamps conforming to Syslog
+  $ENV{TZ} = ':/etc/localtime';  # To spare lots of stat(/etc/localtime) from strftime
+
+  my $_a;
+  if ($a =~ /^(.*):(\d+)$/) {
+    $_a = pack_sockaddr_in($2, inet_aton($1));
+    socket($logsock, AF_INET, SOCK_STREAM, 0);
+  }
+  elsif ($a =~ /^\//) {
+    $_a = sockaddr_un($a);
+    socket($logsock, AF_UNIX, SOCK_DGRAM, 0);
+  } else {
+    die("$a: unknown syslog address");
+  }
+
+  connect($logsock, $_a) or die "connect($a): $!";
+  info("connect($a): ok");
+
+  custom_log_time_update();
+}
+
+# Allow to seldom update the timestamp generator, saves a lot of gettimeofday's
+#
+sub custom_log_time_update {
+  $logtime = strftime "%b %e %T", localtime;
+}
+
+# We have our custom syslog implementation because the native interface) does
+# not allow to fiddle with the 'ident' param.
+#
+sub custom_log {
+  my $ident = shift;
+  my $msg = shift;
+
+  send($logsock, "<$logprio>$logtime $ident: $msg\0", 0);
+}
+
+sub add_logfile {
+  my $pathspec = shift;
+  my $tag = shift;
+
+  foreach my $path (glob $pathspec) {
+    next if defined $states{$path};  # Already tracked
+    $states{$path} = {
+      path => $path,  # Yes, $path is in key and value, it's easier that way
+      tag  => $tag
+    };
+    info("$path: registered with ".(defined $tag ? "tag '$tag'" : "no tag"));
+  }
+}
+
+sub read_list {
+  my $listfile = shift;
+
+  open(my $fh, '<', $listfile) or die "$listfile: $!";
+  while(<$fh>) {
+    chomp;
+    s/^\s*//; s/\s*$//;    # Remove leading and trailing whitespaces
+    next if /^#/ || /^$/;  # Ignore comments and empty statements
+    add_logfile(split(/\s+/, $_));
+  }
+  close($fh);
+}
+
+# Read end of file (from last read position) and parse text lines
+#
+sub read_lines {
+  my $state = shift;
+
+  debug("  read_lines: fh=%s, ino=%d, pos=%d\n", $state->{handle} ? 'open' : 'closed', $state->{ino}, $state->{pos});
+  while (1) {
+    my $buffer;
+    my $read = sysread($state->{handle}, $buffer, 65536);
+
+    if (!defined $read) {
+      error("error while reading file: $!");
+      return;
+    }
+    debug("  read_lines: bytes=%d\n", $read);
+    last if !$read;  # EOF
+
+    my $a = 0;
+    my $b;
+    while ($b = index($buffer, "\n", $a)) {
+      last if $b < 0;
+
+      my $line = substr($buffer, $a, $b - $a);  # Don't copy EOL
+      my $ident = defined $state->{tag} ? $state->{tag} : $state->{path};
+      custom_log($ident, $line);
+      debug("[%5d %5d] %s\n", $a, $b, $line);
+      $a = $b + 1;
+    }
+    last if $a == 0;  # No lines were found, stop reading
+
+    debug("  read_lines: updating pos: %d -> %d (a=%d, b=%d)\n", $state->{pos}, $state->{pos}+$a, $a, $b);
+    $state->{pos} += $a;
+  }
+}
+
+# $states{/var/log/syslog} = {
+#   path   => '/var/log/syslog',
+#   tag    => 'tag...',
+#   handle => <>,     # if not defined, the next fields are meaningless
+#   ino    => #ino,   # inode at open() time
+#   size   => bytes,  # last known file size
+#   pos    => bytes,  # position of next byte to be read
+# }
+#
+sub track_logfile {
+  my $state = shift;
+  my $path = $state->{path};
+
+  debug("%s: scanning...\n", $path);
+  my @meta = stat($path);
+
+  if (!@meta && defined $state->{handle}) {
+    # File has vanished, parsed what's left, close it, stop tracking
+    read_lines($state);
+    info("$path: missing, stopping tracking");
+    close($state->{handle});
+    delete $state->{handle};
+    return;
+  }
+  return if !@meta;  # No file at all, ignore
+
+  my $reopen = 0;
+  if (@meta && !defined $state->{handle}) {
+    info("$path: present, starting tracking");
+    $reopen = 1;
+  }
+  elsif ($meta[1] != $state->{ino}) {
+    info("$path: inode changed, reopening");
+    $reopen = 1;
+  }
+  elsif ($meta[7] < $state->{size}) {
+    info("$path: truncated, reopening");
+    $reopen = 1;
+  }
+
+  read_lines($state) if defined $state->{handle};
+
+  if ($reopen) {
+    if (defined $state->{handle}) {
+      close($state->{handle});
+      delete $state->{handle};
+    }
+    if (!open($state->{handle}, '<', $path)) {
+      error("$path: open error: $!");
+      return;
+    }
+
+    # Reset or restore state and parse what's already available
+    my $s = $saved{$path};
+    if (defined $s) {
+      info("$path: restoring saved state");
+      $state->{ino}  = $s->{ino};
+      $state->{size} = $s->{size};
+      $state->{pos}  = $s->{pos};
+      delete $saved{$path};  # Restore only once
+      sysseek($state->{handle}, $state->{pos}, SEEK_CUR);
+    } else {
+      $state->{ino}  = $meta[1];
+      $state->{size} = $meta[7];
+      $state->{pos}  = 0;
+    }
+    read_lines($state);
+  } else {
+    $state->{size} = $meta[7];
+  }
+}
+
+sub write_states {
+  return if not defined $statefile;
+
+  info("writing states to $statefile");
+  my $fh;
+  if (!open($fh, '>', $statefile)) {
+    error("$statefile: opening file for writing: $!");
+    return;
+  }
+
+  foreach (sort keys %states) {
+    my $s = $states{$_};
+    next if !defined $s->{handle};  # Only save live states
+    print $fh "$_ ".(defined $s->{$_} ? $s->{$_} : "")."\n" foreach qw/path ino size pos/;
+    print $fh "--\n";
+  }
+
+  close($fh);
+}
+
+sub read_states {
+  return if not defined $statefile;
+
+  info("reading states from $statefile");
+  my $fh;
+  if (!open($fh, '<', $statefile)) {
+    error("$statefile: opening file: $!");
+    return;
+  }
+
+  my %s;
+  while (<$fh>) {
+    if (/^--/) {  # End of state declaration, store into %saved
+      if (defined $s{path}) {
+        my %copy = %s;
+        $saved{ $s{path} } = \%copy;
+      }
+      %s = ();
+      next;
+    }
+    $s{$1} = $2 if /^(.*?)\s+(.*)/;  # Parse 'key<spacing>value...'
+  }
+
+  close($fh);
+}
+
+
+my $opt = GetOptions(
+    'a|address=s'      => \$address,
+    'd|debug'          => \$debug,
+    'f|facility=s'     => \$facility,
+    'h|help'           => \$help,
+    'l|list=s'         => \$listfile,
+    'p|priority=s'     => \$priority,
+    's|scan-period=i'  => \$scan,
+    't|state-file=s'   => \$statefile,
+);
+print_help() if !$opt || $help || (!defined $listfile && !@ARGV);
+
+custom_log_init($address, $facility, $priority);
+
+read_list($listfile) if defined $listfile;
+foreach (@ARGV) {
+  add_logfile(split(/\s+/, $_));
+}
+
+read_states();
+$SIG{INT} = $SIG{QUIT} = $SIG{PIPE} = sub { $running = 0; };
+$SIG{HUP} = 'IGNORE';
+
+while ($running) {
+  custom_log_time_update();
+  track_logfile($states{$_}) foreach sort keys %states;
+  sleep $scan;
+}
+
+write_states();
