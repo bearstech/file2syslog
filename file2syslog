@@ -44,7 +44,7 @@ my %saved;
 
 sub print_help {
   print <<EOF;
-Usage: $0 [options] logfile[ tag] ...
+Usage: file2syslog [options] logfile[ tag] ...
 
 Options :
 
@@ -61,11 +61,15 @@ merged. Wildcards are authorized in file names. Files may be 'tagged'
 (replacing syslog ident) by appending the file name with a word (either from
 arg or list file) :
 
-  $0 'rails-app.log rails'
+  file2syslog 'rails-app.log rails'
 
 If you don't provide a statefile, this program will re-issue already parsed
 lines upon restart. Otherwise, state is automatically read at startup and saved
 if program is interrupted.
+
+This program supports logging to the regular /dev/log Unix socket, but may also
+open a TCP connection to a host:port address. At this time the TCP handler does
+not auto-reconnect.
 
 EOF
   exit 0;
