@@ -332,7 +332,7 @@ foreach (@ARGV) {
 }
 
 read_states();
-$SIG{INT} = $SIG{QUIT} = $SIG{PIPE} = sub { $running = 0; };
+$SIG{INT} = $SIG{TERM} = $SIG{QUIT} = $SIG{PIPE} = sub { $running = 0; };
 $SIG{HUP} = 'IGNORE';
 
 while ($running) {
