@@ -34,10 +34,11 @@ my $listfile;
 my $help  = 0;
 my $debug = 0;
 
-my $running = 1;  # Flag cleared by signal handler
+my $running = 1;   # Flag cleared by signal handler
 my $logsock;
 my $logprio;
-my $logtime;
+my $logtime;       # Timestamp, explicitly updated by custom_log_time_update()
+my $logtimeretry;  # Last socket reopen timestamp (defined if attempted)
 my %states;
 my %saved;
 
@@ -68,8 +69,7 @@ lines upon restart. Otherwise, state is automatically read at startup and saved
 if program is interrupted.
 
 This program supports logging to the regular /dev/log Unix socket, but may also
-open a TCP connection to a host:port address. At this time the TCP handler does
-not auto-reconnect.
+open a TCP connection to a host:port address.
 
 EOF
   exit 0;
@@ -128,7 +128,20 @@ sub custom_log {
   my $ident = shift;
   my $msg = shift;
 
-  send($logsock, "<$logprio>$logtime $ident: $msg\0", 0);
+  my $sent = send($logsock, "<$logprio>$logtime $ident: $msg\0", 0);
+  if (defined $sent && $sent > 0) {
+    $logtimeretry = undef;
+    return;
+  }
+
+  # Limit reconnect attempts at the scan frequency
+  if ($! =~ /conn/i && (!defined $$logtimeretry || $logtime - $logtimeretry >= $scan)) {
+    close($logsock);
+    $logsock = undef;
+    $logtimeretry = $logtime;
+    custom_log_init($address, $facility, $priority);
+    custom_log($ident, $msg);  # Retry the message (the above rate-limit is also a recursion limit)
+  }
 }
 
 sub add_logfile {
