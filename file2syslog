@@ -102,8 +102,9 @@ sub custom_log_init {
   $ENV{TZ} = ':/etc/localtime';  # To spare lots of stat(/etc/localtime) from strftime
 
   my $_a;
-  if ($a =~ /^(.*):(\d+)$/) {
-    $_a = pack_sockaddr_in($2, inet_aton($1));
+  if ($a =~ /^([^\/:]*)(:(\d+))?$/) {
+    my ($host, $port) = ($1, defined $3 ? $3 : 514);
+    $_a = pack_sockaddr_in($port, inet_aton($host));
     socket($logsock, AF_INET, SOCK_STREAM, 0);
   }
   elsif ($a =~ /^\//) {
