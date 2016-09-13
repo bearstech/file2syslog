@@ -20,6 +20,7 @@ use strict;
 use warnings;
 use Getopt::Long;
 use Sys::Syslog;
+use Sys::Hostname;
 use Fcntl 'SEEK_CUR';
 use POSIX qw(strftime setlocale LC_TIME);
 use Socket;
@@ -35,6 +36,7 @@ my $help  = 0;
 my $debug = 0;
 
 my $running = 1;   # Flag cleared by signal handler
+my $hostname;
 my $logsock;
 my $logprio;
 my $logtime;       # Timestamp, explicitly updated by custom_log_time_update()
@@ -90,6 +92,8 @@ sub error {
 sub custom_log_init {
   my ($a, $f, $p) = @_;
 
+  $hostname = hostname();  # Get host's own name, we always prefix with it
+
   my $_f = Sys::Syslog::xlate($f); die "$f: unknown facility" if $_f < 0;
   my $_p = Sys::Syslog::xlate($p); die "$p: unknown priority" if $_p < 0;
   $logprio = $_f + $_p;
@@ -128,7 +132,9 @@ sub custom_log {
   my $ident = shift;
   my $msg = shift;
 
-  my $sent = send($logsock, "<$logprio>$logtime $ident: $msg\0", 0);
+  $msg =~ s/[\r\n]*$//;   # chomp any line endings
+  $msg =~ s/[\r\n]+/ /g;  # also replace those right in the middle with a simple space (we could split in several syslog messages ...)
+  my $sent = send($logsock, "<$logprio>$logtime $hostname $ident: $msg\n\0", 0);
   if (defined $sent && $sent > 0) {
     $logtimeretry = undef;
     return;
