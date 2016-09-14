@@ -1,0 +1,13 @@
+[Unit]
+Description=file2syslog
+After=network.target
+Documentation=https://github.com/bearstech/file2syslog
+
+[Service]
+User=www-data
+ExecStart=/opt/file2syslog/file2syslog -a log -l /etc/file2syslog.conf -t /var/spool/file2syslog/state
+KillMode=process
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
