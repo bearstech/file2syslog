@@ -26,10 +26,10 @@ use POSIX qw(strftime setlocale LC_TIME);
 use Socket;
 
 # Options
-my $address   = '/dev/log';
-my $facility  = 'user';
-my $priority  = 'info';
-my $scan      = 10;
+my $address    = '/dev/log';
+my $facility   = 'user';
+my $priority   = 'info';
+my $scanperiod = 10;
 my $statefile;
 my $listfile;
 my $help  = 0;
@@ -142,7 +142,7 @@ sub custom_log {
   }
 
   # Limit reconnect attempts at the scan frequency
-  if ($! =~ /conn/i && (!defined $$logtimeretry || $logtime - $logtimeretry >= $scan)) {
+  if ($! =~ /conn/i && (!defined $$logtimeretry || $logtime - $logtimeretry >= $scanperiod)) {
     close($logsock);
     $logsock = undef;
     $logtimeretry = $logtime;
@@ -232,7 +232,7 @@ sub track_logfile {
   if (!@meta && defined $state->{handle}) {
     # File has vanished, parsed what's left, close it, stop tracking
     read_lines($state);
-    info("$path: missing, stopping tracking");
+    info("$path: vanished, stopping tracking");
     close($state->{handle});
     delete $state->{handle};
     return;
@@ -240,20 +240,23 @@ sub track_logfile {
   return if !@meta;  # No file at all, ignore
 
   my $reopen = 0;
-  if (@meta && !defined $state->{handle}) {
-    info("$path: present, starting tracking");
+  my $reset = 0;
+  if (!defined $state->{handle}) {
+    info("$path: (re)appeared, starting tracking");
     $reopen = 1;
   }
   elsif ($meta[1] != $state->{ino}) {
+    # Make sure we parsed everything through the open handle before closing it
+    read_lines($state);
     info("$path: inode changed, reopening");
     $reopen = 1;
+    $reset = 1;
   }
   elsif ($meta[7] < $state->{size}) {
     info("$path: truncated, reopening");
     $reopen = 1;
+    $reset = 1;
   }
-
-  read_lines($state) if defined $state->{handle};
 
   if ($reopen) {
     if (defined $state->{handle}) {
@@ -339,7 +342,7 @@ my $opt = GetOptions(
     'h|help'           => \$help,
     'l|list=s'         => \$listfile,
     'p|priority=s'     => \$priority,
-    's|scan-period=i'  => \$scan,
+    's|scan-period=i'  => \$scanperiod,
     't|state-file=s'   => \$statefile,
 );
 print_help() if !$opt || $help || (!defined $listfile && !@ARGV);
@@ -358,7 +361,7 @@ $SIG{HUP} = 'IGNORE';
 while ($running) {
   custom_log_time_update();
   track_logfile($states{$_}) foreach sort keys %states;
-  sleep $scan;
+  sleep $scanperiod;
 }
 
 write_states();
