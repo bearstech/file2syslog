@@ -29,6 +29,7 @@ use Socket;
 my $address    = '/dev/log';
 my $facility   = 'user';
 my $priority   = 'info';
+my $format;
 my $scanperiod = 10;
 my $statefile;
 my $listfile;
@@ -40,6 +41,7 @@ my $hostname;
 my $logsock;
 my $logprio;
 my $logtime;       # Timestamp, explicitly updated by custom_log_time_update()
+my $logtimeiso;    # Timestamp (idem, but ISO format)
 my $logtimeretry;  # Last socket reopen timestamp (defined if attempted)
 my %states;
 my %saved;
@@ -54,6 +56,7 @@ Options :
   -a|--address ADDR        (default: /dev/log)
   -d|--debug
   -f|--facility FACILITY   (default: user)
+  -m|--format FORMAT
   -p|--priority PRIO       (default: info)
   -l|--list file
   -s|--scan-period SECONDS (default: 10)
@@ -123,7 +126,10 @@ sub custom_log_init {
 # Allow to seldom update the timestamp generator, saves a lot of gettimeofday's
 #
 sub custom_log_time_update {
-  $logtime = strftime "%b %e %T", localtime;
+  my @now = localtime;
+  $logtime = strftime "%b %e %T", @now;
+  $logtimeiso = strftime "%FT%T%z", @now;
+  $logtimeiso =~ s/(\d\d)$/:$1/;  # Adjust 'hhmm' TZ into 'hh:mm'
 }
 
 # We have our custom syslog implementation because the native interface) does
@@ -135,7 +141,25 @@ sub custom_log {
 
   $msg =~ s/[\r\n]*$//;   # chomp any line endings
   $msg =~ s/[\r\n]+/ /g;  # also replace those right in the middle with a simple space (we could split in several syslog messages ...)
-  my $sent = send($logsock, "<$logprio>$logtime $hostname $ident: $msg\n\0", 0);
+
+  my $payload;
+  if (defined $format) {
+    my %subst = (
+      'prio'    => $logprio,
+      'time'    => $logtime,
+      'timeiso' => $logtimeiso,
+      'host'    => $hostname,
+      'app'     => $ident,
+      'msg'     => $msg,
+      'nl'      => "\n",
+    );
+    $payload = $format;
+    $payload =~ s/{([a-z]+)}/my $s=$subst{$1}; defined $s ? $s:'?'/ge;
+  }
+  else {
+    $payload = "<$logprio>$logtime $hostname $ident: $msg\n";
+  }
+  my $sent = send($logsock, $payload."\0", 0);
   if (defined $sent && $sent > 0) {
     $logtimeretry = undef;
     return;
@@ -341,6 +365,7 @@ my $opt = GetOptions(
     'f|facility=s'     => \$facility,
     'h|help'           => \$help,
     'l|list=s'         => \$listfile,
+    'm|format=s'       => \$format,
     'p|priority=s'     => \$priority,
     's|scan-period=i'  => \$scanperiod,
     't|state-file=s'   => \$statefile,
