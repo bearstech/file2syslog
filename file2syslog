@@ -38,6 +38,7 @@ my $debug = 0;
 
 my $running = 1;   # Flag cleared by signal handler
 my $hostname;
+my $islocal;
 my $logsock;
 my $logprio;
 my $logtime;       # Timestamp, explicitly updated by custom_log_time_update()
@@ -109,10 +110,12 @@ sub custom_log_init {
     my ($host, $port) = ($1, defined $3 ? $3 : 514);
     $_a = pack_sockaddr_in($port, inet_aton($host));
     socket($logsock, AF_INET, SOCK_STREAM, 0);
+    $islocal = 0;
   }
   elsif ($a =~ /^\//) {
     $_a = sockaddr_un($a);
     socket($logsock, AF_UNIX, SOCK_DGRAM, 0);
+    $islocal = 1;
   } else {
     die("$a: unknown syslog address");
   }
@@ -155,8 +158,9 @@ sub custom_log {
     );
     $payload = $format;
     $payload =~ s/{([a-z]+)}/my $s=$subst{$1}; defined $s ? $s:'?'/ge;
-  }
-  else {
+  } elsif ($islocal) {
+    $payload = "<$logprio>$logtime $ident: $msg\n";
+  } else {
     $payload = "<$logprio>$logtime $hostname $ident: $msg\n";
   }
   my $sent = send($logsock, $payload."\0", 0);
@@ -306,10 +310,11 @@ sub track_logfile {
       $state->{size} = $meta[7];
       $state->{pos}  = 0;
     }
-    read_lines($state);
   } else {
     $state->{size} = $meta[7];
   }
+
+  read_lines($state);
 }
 
 sub write_states {
