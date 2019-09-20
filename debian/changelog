@@ -1,4 +1,4 @@
-file2syslog (1.1~jessie+bearstech1) jessie-bearstech; urgency=medium
+file2syslog (1.1~buster+bearstech1) buster-bearstech; urgency=medium
 
   * Initial packaging
 
