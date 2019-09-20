@@ -1,0 +1,2 @@
+- add version (now there's one in debian/changelog)
+- re-evaluate globs at every scan interval ?

@@ -15,11 +15,11 @@
 . /lib/lsb/init-functions
 
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin:/opt/file2syslog
-DAEMON=/opt/file2syslog/file2syslog
+DAEMON=/usr/sbin/file2syslog
 DAEMON_OPTS="-a log -l /etc/file2syslog.conf -t /var/spool/file2syslog/state"
 NAME=file2syslog
 PIDFILE=/var/run/file2syslog.pid
-RUNAS=www-data
+RUNAS=file2syslog
 
 test -x $DAEMON || exit 0
 

@@ -1,0 +1,5 @@
+file2syslog (1.1) bearstech-jessie; urgency=medium
+
+  * Initial packaging
+
+ -- Vincent CARON <vcaron@bearstech.com>  Fri, 20 Sep 2019 16:06:06 +0200
