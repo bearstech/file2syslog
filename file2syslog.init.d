@@ -16,7 +16,7 @@
 
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin:/opt/file2syslog
 DAEMON=/usr/sbin/file2syslog
-DAEMON_OPTS="-a log -l /etc/file2syslog.conf -t /var/spool/file2syslog/state"
+DAEMON_OPTS="-l /etc/file2syslog.conf -t /var/spool/file2syslog/state"
 NAME=file2syslog
 PIDFILE=/var/run/file2syslog.pid
 RUNAS=file2syslog

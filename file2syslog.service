@@ -6,7 +6,7 @@ Documentation=https://github.com/bearstech/file2syslog
 [Service]
 User=file2syslog
 Group=adm
-ExecStart=/usr/sbin/file2syslog -a log -l /etc/file2syslog.conf -t /var/spool/file2syslog/state
+ExecStart=/usr/sbin/file2syslog -l /etc/file2syslog.conf -t /var/spool/file2syslog/state
 KillMode=process
 Restart=on-failure
 
